@@ -20,14 +20,15 @@ import threading
 # __name__ is module's name
 logger = logging.getLogger(__name__)
 
-
 class KmallPlayer:
 
-    def __init__(self, files: list, replay_timing: float = None, ip_out: str = "224.1.20.40",
-                 port_out: int = 26103, port_in: int = 4001, unicast=False):
+    # Typing available Python 3.5+...
+    # def __init__(self, files: list, replay_timing: float = None, ip_out: str = "224.1.20.40",
+    #              port_out: int = 26103, port_in: int = 4001, unicast=False):
+    def __init__(self, files=None, replay_timing=None, ip_out="224.1.20.40", port_out=26103, unicast=False):
         self.files = files
         self._replay_timing = replay_timing
-        self.port_in = port_in
+        #self.port_in = port_in
         self.port_out = port_out
         self.ip_out = ip_out
         self.unicast = unicast
@@ -96,21 +97,34 @@ class KmallPlayer:
             print("Closing file.")
             f.close()
 
+    def create_file_list(self):
+        if os.path.isfile(self.files):
+            self.files = [self.files]
+        elif os.path.isdir(self.files):
+            tempList = []
+            for root, dirs, files in os.walk(self.files):
+                for filename in files:
+                    print(filename)
+                    if filename.lower().endswith(('.kmall', '.kmwcd')):
+                        tempList.append(os.path.join(root, filename))
+            self.files = tempList
 
     def interaction(self):
         """ Read and transmit datagrams """
 
         self.dg_counter = 0
 
-        # scheduler = Scheduler()
-        # scheduler.start()
-
         # TODO: For testing:
         nonMWCdgms = 0
+
+        self.create_file_list()
+        # print(self.files)
+        # exit(0)
 
         # Iterate over list of files:
         for fp in self.files:
 
+            print("File: ", fp)
             # Error checking for appropriate file types:
             fp_ext = os.path.splitext(fp)[-1].lower()
             if fp_ext not in [".kmall", ".kmwcd"]:
@@ -146,25 +160,23 @@ class KmallPlayer:
 
             # Sort k.Index by timestamp
             k.Index.sort_index(inplace=True)
-            #print(k.Index)
+            # print(k.Index)
+            # exit()
 
             # ************************************************************
-            # TODO: If I can figure out how to change index values, this won't be so annoying. Won't have to do these
-            #  calculation when we have a set replay time...
-            #if self._replay_timing is None: # Play datagrams in 'real-time'...
-            # Calculate scheduled delay (earliest time is reference, with delay of zero).
-            sched_delay = [x - k.Index.index[0] for x in k.Index.index]
-            k.Index['ScheduledDelay'] = sched_delay
-            # Reset scheduled delay for #IIP and #IOP datagrams (these will play immediately):
-            k.Index.set_value(IIP_index, 'ScheduledDelay', -2)
-            k.Index.set_value(IOP_index, 'ScheduledDelay', -1)
+            if self._replay_timing is None: # Play datagrams in 'real-time'...
+                # Calculate scheduled delay (earliest time is reference, with delay of zero).
+                sched_delay = [x - k.Index.index[0] for x in k.Index.index]
+                k.Index['ScheduledDelay'] = sched_delay
+                # Reset scheduled delay for #IIP and #IOP datagrams (these will play immediately):
+                k.Index.set_value(IIP_index, 'ScheduledDelay', -2)
+                k.Index.set_value(IOP_index, 'ScheduledDelay', -1)
 
-            # Sort k.Index by scheduled delay
-            k.Index.sort_values(by=['ScheduledDelay'], inplace=True)
+                # Sort k.Index by scheduled delay
+                # k.Index.sort_values(by=['ScheduledDelay'], inplace=True)
 
-            #else: # Play datagrams at some fixed interval...
-            if self._replay_timing is not None:
-                #sched_delay = list(range((2 * self._replay_timing), (len(k.Index) * self._replay_timing), self._replay_timing))
+            else: # Play datagrams at some fixed interval...
+                #if self._replay_timing is not None:
                 sched_delay = np.linspace(0, (len(k.Index) * self._replay_timing), len(k.Index), endpoint=False)
                 k.Index['ScheduledDelay'] = sched_delay
                 # Reset scheduled delay for #IIP and #IOP datagrams (these will play in the first 2 time steps):
@@ -172,11 +184,12 @@ class KmallPlayer:
                 k.Index.set_value(IOP_index, 'ScheduledDelay', self._replay_timing)
 
             # Sort k.Index by scheduled delay
-            #k.Index.sort_values(by=['ScheduledDelay'], inplace=True)
+            k.Index.sort_values(by=['ScheduledDelay'], inplace=True)
             # ************************************************************
 
             # Testing
-            #print(k.Index)
+            # print(k.Index)
+            # exit()
 
             f = open(fp, 'rb')
             #with open(fp, 'rb') as f:
@@ -190,7 +203,7 @@ class KmallPlayer:
 
 
                 # Send negative and zero delay datagrams immediately (#IIP, #IOP)
-                # TODO: Handle big-ass MWC datagrams.
+                # TODO: Handle MWC datagrams.
                 if row['ScheduledDelay'] <= 0 and "#MWC" not in row['MessageType']:
                     # TODO: Testing:
                     nonMWCdgms += 1
@@ -221,8 +234,11 @@ class KmallPlayer:
 
 
     def run(self):
-        logger.debug("kmall_player started -> in: %s, out: %s:%s, timing: %s"
-                     % (self.port_in, self.ip_out, self.port_out, self._replay_timing))
+        # logger.debug("kmall_player started -> in: %s, out: %s:%s, timing: %s"
+        #              % (self.port_in, self.ip_out, self.port_out, self._replay_timing))
+
+        logger.debug("kmall_player started -> out: %s:%s, timing: %s"
+                      % (self.ip_out, self.port_out, self._replay_timing))
 
         self.init_sockets()
         self.interaction()
@@ -241,7 +257,7 @@ if __name__ == '__main__':
     # When replay_timing is set to None, file will replay at real-time speed
     replay_timing_m = None;
     # Default port_in, port_out, and ip_out based on G. Masseti's code
-    port_in_m = 4001
+    #port_in_m = 4001
     port_out_m = 26103
     ip_out_m = "224.1.20.40"
     # Multicast by default; set unicast to True for unicast
@@ -249,7 +265,9 @@ if __name__ == '__main__':
 
     # Testing:
     # ip_out = "127.0.0.1" # For testing
+
     # # 2019 Thunder Bay - With Water Column
+    # This file has small enough MRZs to transfer over UDP:
     # file = 'data/0019_20190511_204630_ASVBEN.kmall' # For testing
 
     # Read command line arguments for file/directory, replay_timing, ip_address, port_out, multicast/unicast
@@ -287,8 +305,12 @@ if __name__ == '__main__':
         elif opt in ('-u', '--unicast'):
             unicast_m = True
 
+    if file_m is None:
+        print("Must enter file or directory: kmall_player.py -f <file_or_directory>")
+        sys.exit()
+
     # Create/initialize new instance of KmallPlayer:
-    player = KmallPlayer([file_m], replay_timing_m, ip_out_m, port_out_m, port_in_m, unicast_m)
+    player = KmallPlayer(file_m, replay_timing_m, ip_out_m, port_out_m, unicast_m)
 
     player.run()
 
