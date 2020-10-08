@@ -5,6 +5,7 @@ import kmall
 
 # 2019 Thunder Bay - With Water Column
 #file = 'data/0019_20190511_204630_ASVBEN.kmall'
+#file = '~/Desktop/SharedFolder_ASV_III/0019_20190511_204630_ASVBEN.kmall'
 
 #2019 Pre-Samoa MAC Test Near Portsmouth
 #file = '0006_20190529_161633_ASVBEN.kmall'
@@ -14,6 +15,8 @@ import kmall
 
 #SCL read fails on this file:
 #file = 'data/0012_20190529_182623_ASVBEN.kmall'
+
+#file = '/home/monster-kitty/Desktop/kmall/test_log_1.kmall'
 
 
 path = 'data'

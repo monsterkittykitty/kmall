@@ -29,8 +29,8 @@ class KmallPlayer:
         self.files = files
         self._replay_timing = replay_timing
         #self.port_in = port_in
-        self.port_out = port_out
         self.ip_out = ip_out
+        self.port_out = port_out
         self.unicast = unicast
 
         self.sock_out = None
@@ -76,11 +76,12 @@ class KmallPlayer:
             logger.debug("sock_out > buffer %sKB" %
                          (self.sock_out.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF) / 1024))
 
-    def send_datagrams(self, f, row, final_byteOffset):
+    def send_single_datagram(self, f, row, final_byteOffset):
         """
-        Sends UDP datagrams extracted from kmall file.
+        Sends single UDP datagrams extracted from kmall file.
         :param f: Opened, binary file to be read.
         :param row: Row of dataframe from indexed kmall file.
+        :param final_byteOffset: Close file when current byte offset equals final_byteOffset.
         """
         f.seek(row['ByteOffset'], 0)
         sent = False
@@ -92,10 +93,57 @@ class KmallPlayer:
         if sent:
             self.dg_counter += 1
 
+        # TODO: TESTING
+        # if self.dg_counter == 5:
+        #     f.close()
+        #     exit()
+        # if self.dg_counter in (85, 86, 87, 88, 89, 90):
+        #     print(self.dg_counter, ": ", row['MessageSize'], ", ", row['MessageType'])
+
         if row['ByteOffset'] == final_byteOffset:
             print("Datagrams transmitted: ", self.dg_counter)
             print("Closing file.")
             f.close()
+
+    def send_all_datagrams_rt(self, fp, df):
+        """
+        Sends all UDP datagrams extracted from kmall file. Will send at scheduled time
+        (real time) or as soon as possible after previous message is sent.
+        :param fp: Binary file (.kmall) to be opened and read.
+        :param df: Dataframe containing datagram offsets, message sizes, and scheduled times.
+        :param final_byteOffset: Close file when current byte offset equals final_byteOffset.
+        """
+        # self.init_sockets()
+        f = open(fp, 'rb')
+        tooBig = 0
+        # Iterate through rows of sorted dataframe:
+        for index, row in df.iterrows():
+            sent = False
+
+            # TODO: Deal with large MRZs and MWCs..
+            #  For now, skip messages that are too big.
+            if row['MessageSize'] < (2 ** 16):
+                # Seek to position in file:
+                f.seek(row['ByteOffset'], 0)
+
+                # TODO: Busy waiting... Not ideal.
+                # Wait for scheduled time:
+                while row['ScheduledPlay'] > datetime.datetime.now():
+                    pass
+                # Send datagram:
+                try:
+                    sent = self.sock_out.sendto(f.read(row['MessageSize']), (self.ip_out, self.port_out))
+                except OSError as e:
+                    logger.warning("%s" % e)
+
+                if sent:
+                    self.dg_counter += 1
+            else:
+                tooBig += 1
+
+        print("Too big: ", tooBig)
+        print("Sent: ", self.dg_counter)
+        f.close()
 
     def create_file_list(self):
         if os.path.isfile(self.files):
@@ -108,108 +156,94 @@ class KmallPlayer:
                     if filename.lower().endswith(('.kmall', '.kmwcd')):
                         tempList.append(os.path.join(root, filename))
             self.files = tempList
+        else:
+            logger.warning("Invalid file path: %s" % self.files)
+            sys.exit(1)
 
-    def interaction(self):
-        """ Read and transmit datagrams """
+    def valid_file_ext(self, fp):
+        print("File: ", fp)
+        # Error checking for appropriate file types:
+        fp_ext = os.path.splitext(fp)[-1].lower()
+        if fp_ext not in [".kmall", ".kmwcd"]:
+            logger.info("SIS 5 mode -> Skipping unsupported file extension: %s" % fp)
+            return False
+        else:
+            return True
 
-        self.dg_counter = 0
+    def calculate_dgm_schedule(self, df):
+        """
+        Inserts 'ScheduledDelay' and 'ScheduledPlay' fields into dataframe;
+        the values in these fields are determined based on datagram timestamps (datagram index field).
+        :param df: Dataframe obtained from kmall.index_file() function.
+        """
+        # Find #IIP and #IOP datagrams; capture timestamps (index).
+        # We will want to send #IIP and #IOP datagrams first.
+        IIP_index = None
+        IOP_index = None
+        for index, row in df.iterrows():
+            if IIP_index is None:
+                if '#IIP' in row['MessageType']:
+                    IIP_index = index
+            if IOP_index is None:
+                if '#IOP' in row['MessageType']:
+                    IOP_index = index
+            if IIP_index is not None and IOP_index is not None:
+                break
 
-        # TODO: For testing:
-        nonMWCdgms = 0
+        # Sort k.Index by timestamp
+        df.sort_index(inplace=True)
 
-        self.create_file_list()
-        # print(self.files)
-        # exit(0)
+        # Calculate delay:
+        if self._replay_timing is None:  # Play datagrams in 'real-time'...
+            # Calculate scheduled delay (earliest time (k.Index.index[0]) is reference, with delay of zero).
+            sched_delay = [x - df.index[0] for x in df.index]
 
-        # Iterate over list of files:
-        for fp in self.files:
+        else:  # Play datagrams at some fixed interval...
+            # Calculate scheduled delay at some fixed interval.
+            sched_delay = np.linspace(0, (len(df) * self._replay_timing), len(df), endpoint=False)
 
-            print("File: ", fp)
-            # Error checking for appropriate file types:
-            fp_ext = os.path.splitext(fp)[-1].lower()
-            if fp_ext not in [".kmall", ".kmwcd"]:
-                logger.info("SIS 5 mode -> Skipping unsupported file extension: %s" % fp)
-                continue
+        df['ScheduledDelay'] = sched_delay
+        # Reset scheduled delay for #IIP and #IOP datagrams (these will play first):
+        df.at[IIP_index, 'ScheduledDelay'] = -2
+        df.at[IOP_index, 'ScheduledDelay'] = -1
 
-            # (From GM's code:)
-            # try:
-            #     f = open(fp, 'rb')
-            #     f_sz = os.path.getsize(fp)
-            # except (OSError, IOError):
-            #     raise RuntimeError("Unable to open %s" % fp)
+        # Sort k.Index by scheduled delay
+        df.sort_values(by=['ScheduledDelay'], inplace=True)
 
-            # Index file (find offsets and sizes of each datagram):
-            # Function index_file() creates a dataframe ("k.Index") containing fields for
-            # "Time" (index), "ByteOffset","MessageSize", and "MessageType".
-            k = kmall.kmall(fp)
-            k.index_file()
+        # Calculate scheduled time to play data datagram based on delay and current time:
+        # TODO: This may only be needed for real-time...
+        now = datetime.datetime.now()
+        sched_play = [now + datetime.timedelta(seconds=(x + 3)) for x in df['ScheduledDelay']]
+        df['ScheduledPlay'] = sched_play
 
-            # Find #IIP and #IOP datagrams; capture timestamps (index).
-            # We will want to send #IIP and #IOP datagrams first.
-            IIP_index = None
-            IOP_index = None
-            for index, row in k.Index.iterrows():
-                if IIP_index is None:
-                    if '#IIP' in row['MessageType']:
-                        IIP_index = index
-                if IOP_index is None:
-                    if '#IOP' in row['MessageType']:
-                        IOP_index = index
-                if IIP_index is not None and IOP_index is not None:
-                    break
-
-            # Sort k.Index by timestamp
-            k.Index.sort_index(inplace=True)
-            # print(k.Index)
-            # exit()
-
-            # ************************************************************
-            if self._replay_timing is None: # Play datagrams in 'real-time'...
-                # Calculate scheduled delay (earliest time is reference, with delay of zero).
-                sched_delay = [x - k.Index.index[0] for x in k.Index.index]
-                k.Index['ScheduledDelay'] = sched_delay
-                # Reset scheduled delay for #IIP and #IOP datagrams (these will play immediately):
-                k.Index.set_value(IIP_index, 'ScheduledDelay', -2)
-                k.Index.set_value(IOP_index, 'ScheduledDelay', -1)
-
-                # Sort k.Index by scheduled delay
-                # k.Index.sort_values(by=['ScheduledDelay'], inplace=True)
-
-            else: # Play datagrams at some fixed interval...
-                #if self._replay_timing is not None:
-                sched_delay = np.linspace(0, (len(k.Index) * self._replay_timing), len(k.Index), endpoint=False)
-                k.Index['ScheduledDelay'] = sched_delay
-                # Reset scheduled delay for #IIP and #IOP datagrams (these will play in the first 2 time steps):
-                k.Index.set_value(IIP_index, 'ScheduledDelay', 0)
-                k.Index.set_value(IOP_index, 'ScheduledDelay', self._replay_timing)
-
-            # Sort k.Index by scheduled delay
-            k.Index.sort_values(by=['ScheduledDelay'], inplace=True)
-            # ************************************************************
-
-            # Testing
-            # print(k.Index)
-            # exit()
+    def play_datagrams(self, fp, df):
+        if self._replay_timing is None:  # Real-time replay:
+            # TODO: Last few messages are being counted as sent, but are not being written to file at rx side.
+            # Replay all datagrams in single new thread:
+            threading.Timer(-1, self.send_all_datagrams_rt(fp, df)).start()
+        else:  # Fixed-interval reply:
+            # Schedule each datagram in its own new thread to avoid busy waiting for extended periods of time.
+            # TODO: This could still have problems with overlapping messages if interval is too small.
+            # TODO: Main thread could close (along with socket) before all messages are sent?
+            nonMWCdgms = 0
 
             f = open(fp, 'rb')
-            #with open(fp, 'rb') as f:
 
-            final_byteOffset = k.Index['ByteOffset'].iloc[-1]
+            final_byteOffset = df['ByteOffset'].iloc[-1]
             now = datetime.datetime.now()
 
             # Iterate through rows of sorted dataframe:
-            for index, row in k.Index.iterrows():
-                #if replay_timing is None: # Play datagrams in 'real-time'...
-
+            for index, row in df.iterrows():
 
                 # Send negative and zero delay datagrams immediately (#IIP, #IOP)
                 # TODO: Handle MWC datagrams.
                 if row['ScheduledDelay'] <= 0 and "#MWC" not in row['MessageType']:
                     # TODO: Testing:
                     nonMWCdgms += 1
-                    self.send_datagrams(f, row, final_byteOffset)
+                    self.send_single_datagram(f, row, final_byteOffset)
                     if row['ScheduledDelay'] == 0:
                         now = datetime.datetime.now()
+
                 # Schedule positive delay datagrams
                 else:
                     # TODO: Handle MWC datagrams.
@@ -218,20 +252,41 @@ class KmallPlayer:
                         nonMWCdgms += 1
                         run_at = now + datetime.timedelta(seconds=row['ScheduledDelay'])
                         delay = (run_at - now).total_seconds()
-                        threading.Timer(delay, self.send_datagrams, [f, row, final_byteOffset]).start()
+                        threading.Timer(delay, self.send_single_datagram, [f, row, final_byteOffset]).start()
 
+            print("Sent dgms: ", nonMWCdgms)
 
-                # else: # Play datagrams at some fixed interval...
-                #     if "#MWC" not in row['MessageType']:
-                #         now = datetime.datetime.now()
-                #         run_at = now + datetime.timedelta(self._replay_timing)
-                #         delay = (run_at - now).total_seconds()
-                #         # TODO: Testing:
-                #         nonMWCdgms += 1
-                #         threading.Timer(replay_timing, self.send_datagrams, [f, row, final_byteOffset]).start()
+    def interaction(self):
+        """ Read and transmit datagrams """
+        self.dg_counter = 0
 
-            print("nonMWCdgms: ", nonMWCdgms)
+        self.create_file_list()
 
+        # Iterate over list of files:
+        for fp in self.files:
+
+            if self.valid_file_ext(fp):
+
+                # (From GM's code:)
+                # try:
+                #     f = open(fp, 'rb')
+                #     f_sz = os.path.getsize(fp)
+                # except (OSError, IOError):
+                #     raise RuntimeError("Unable to open %s" % fp)
+
+                # Index file (find offsets and sizes of each datagram):
+                # Function index_file() creates a dataframe ("k.Index") containing fields for
+                # "Time" (index), "ByteOffset","MessageSize", and "MessageType".
+                k = kmall.kmall(fp)
+                k.index_file()
+
+                # Calculate scheduled delay and play time for each datagram:
+                self.calculate_dgm_schedule(k.Index)
+
+                #print(k.Index['MessageType'])
+                #print(k.Index['ScheduledPlay'])
+
+                self.play_datagrams(fp, k.Index)
 
     def run(self):
         # logger.debug("kmall_player started -> in: %s, out: %s:%s, timing: %s"
@@ -247,6 +302,23 @@ class KmallPlayer:
 
     #def parse_command_line(self):
 
+    def count_datagrams(self, df):
+        # TODO: For testing.
+        svt = 0
+        cpo = 0
+        spo = 0
+
+        for index, row in df.iterrows():
+            if '#SVT' in row['MessageType']:
+                svt += 1
+            elif '#CPO' in row['MessageType']:
+                cpo += 1
+            elif '#SPO' in row['MessageType']:
+                spo += 1
+
+        print("SVT: ", svt)
+        print("CPO: ", cpo)
+        print("SPO: ", spo)
 
 if __name__ == '__main__':
 
@@ -311,6 +383,5 @@ if __name__ == '__main__':
 
     # Create/initialize new instance of KmallPlayer:
     player = KmallPlayer(file_m, replay_timing_m, ip_out_m, port_out_m, unicast_m)
-
     player.run()
 
