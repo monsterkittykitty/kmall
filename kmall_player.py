@@ -28,7 +28,6 @@ class KmallPlayer:
     def __init__(self, files=None, replay_timing=None, ip_out="224.1.20.40", port_out=26103, unicast=False):
         self.files = files
         self._replay_timing = replay_timing
-        #self.port_in = port_in
         self.ip_out = ip_out
         self.port_out = port_out
         self.unicast = unicast
@@ -289,9 +288,6 @@ class KmallPlayer:
                 self.play_datagrams(fp, k.Index)
 
     def run(self):
-        # logger.debug("kmall_player started -> in: %s, out: %s:%s, timing: %s"
-        #              % (self.port_in, self.ip_out, self.port_out, self._replay_timing))
-
         logger.debug("kmall_player started -> out: %s:%s, timing: %s"
                       % (self.ip_out, self.port_out, self._replay_timing))
 
@@ -299,8 +295,6 @@ class KmallPlayer:
         self.interaction()
 
         logger.debug("kmall_player ended")
-
-    #def parse_command_line(self):
 
     def count_datagrams(self, df):
         # TODO: For testing.
