@@ -366,7 +366,7 @@ class kmall():
 
         return dg
 
-    def read_EMdgmMRZ_pingInfo(self):
+    def read_EMdgmMRZ_pingInfo(self, dgmVersion=0):
         """
         Read #MRZ - ping info. Information on vessel/system level,
         i.e. information common to all beams in the current ping.
@@ -514,7 +514,13 @@ class kmall():
         dg['padding3'] = fields[44]
 
         # For some reason, it doesn't work to do this all in one step, but it works broken up into two steps. *shrug*
-        format_to_unpack_b = "2d1f"
+        if dgmVersion == 0:
+            format_to_unpack_b = "2d1f"
+        elif dgmVersion == 2:
+            format_to_unpack_b = "2d2f2B1H"
+        else:
+            print("Unsupported dgmVersion for MRZ : %s",str(dgmVersion))
+
         fields = struct.unpack(format_to_unpack_b, self.FID.read(struct.Struct(format_to_unpack_b).size))
 
         # Latitude (decimal degrees) of vessel reference point at time of midpoint of first tx pulse.
@@ -528,6 +534,19 @@ class kmall():
         # of the position sensor.
         dg['ellipsoidHeightReRefPoint_m'] = fields[2]
 
+        if dgmVersion == 2:
+            # Backscatter offset set in the installation menu
+            dg['bsCorrectionOffset_dB'] = fields[3]
+            # Beam intensity data corrected as seabed image data (Lambert and normal incidence corrections)
+            dg['lambertsLawApplied'] = fields[4]
+            # Ice window installed
+            dg['iceWindow'] = fields[5]
+            # Sets status for active modes.
+            # Bit   |       Modes             | Setting
+            # 1     | EM MultiFrequency Mode  | 0 = not active, 1 = active
+            # 2-16  | Not in use              | NA 
+            dg['activeModes'] = fields[6]
+
         # Skip unknown fields.
         self.FID.seek(dg['numBytesInfoData'] - struct.Struct(format_to_unpack_a).size
                       - struct.Struct(format_to_unpack_b).size, 1)
@@ -537,7 +556,7 @@ class kmall():
 
         return dg
 
-    def read_EMdgmMRZ_txSectorInfo(self):
+    def read_EMdgmMRZ_txSectorInfo(self, dgmVersion=0):
         """
         Read #MRZ - sector info. Information specific to each transmitting sector.
         sectorInfo is repeated numTxSectors (Ntx)- times in datagram.
@@ -547,7 +566,11 @@ class kmall():
         # LMD tested.
 
         dg = {}
-        format_to_unpack = "4B7f2B1H"
+        if dgmVersion == 0:
+            format_to_unpack = "4B7f2B1H"
+        elif dgmVersion == 2:
+            format_to_unpack = "4B7f2B1H3f"
+
         fields = struct.unpack(format_to_unpack, self.FID.read(struct.Struct(format_to_unpack).size))
 
         # TX sector index number, used in the sounding section. Starts at 0.
@@ -583,6 +606,17 @@ class kmall():
         dg['signalWaveForm'] = fields[12]
         # Byte alignment.
         dg['padding1'] = fields[13]
+
+        if dgmVersion == 2:
+            # 20 log(Measured high voltage power level at TX pulse / Nominal high voltage power level). 
+            # This parameter will also include the effect of user selected transmit power reduction (transmitPower_dB) and mammal protection. 
+            # Actual SL = txNominalSourceLevel_dB + highVoltageLevel_dB. Unit dB.
+            dg['highVoltageLevel_dB'] = fields[14]
+            # Backscatter correction added in sector tracking mode. Unit dB.
+            dg['sectorTrackingCorr_dB'] = fields[15]
+            # Signal length used for backscatter footprint calculation. This compensates for the TX pulse tapering and the RX filter bandwidths. 
+            # Unit second.
+            dg['effectiveSignalLength_sec'] = fields[16]
 
         if self.verbose > 2:
             self.print_datagram(dg)
@@ -814,6 +848,10 @@ class kmall():
         dg['header'] = self.read_EMdgmHeader()
         dg['partition'] = self.read_EMdgmMpartition()
         dg['cmnPart'] = self.read_EMdgmMbody()
+
+        # The dgmVersion is an integer that specifies the KMall format version per message.
+        # Here, the format version for the MRZ message is read.
+        dgmVersion = dg['dgmVersion']
         dg['pingInfo'] = self.read_EMdgmMRZ_pingInfo()
 
         # Read TX sector info for each sector
