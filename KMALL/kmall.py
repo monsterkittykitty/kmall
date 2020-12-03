@@ -852,12 +852,12 @@ class kmall():
         # The dgmVersion is an integer that specifies the KMall format version per message.
         # Here, the format version for the MRZ message is read.
         dgmVersion = dg['dgmVersion']
-        dg['pingInfo'] = self.read_EMdgmMRZ_pingInfo()
+        dg['pingInfo'] = self.read_EMdgmMRZ_pingInfo(dgmVersion)
 
         # Read TX sector info for each sector
         txSectorInfo = []
         for sector in range(dg['pingInfo']['numTxSectors']):
-            txSectorInfo.append(self.read_EMdgmMRZ_txSectorInfo())
+            txSectorInfo.append(self.read_EMdgmMRZ_txSectorInfo(dgmVersion))
         dg['txSectorInfo'] = self.listofdicts2dictoflists(txSectorInfo)
 
         # Read reInfo
@@ -998,7 +998,7 @@ class kmall():
 
         return dg
 
-    def read_EMdgmMWCrxBeamData(self):
+    def read_EMdgmMWCrxBeamData(self, dgmVersion=0):
         """
         Read #MWC - data block 2: receiver, specific info for each beam.
         :return: A dictionary containing EMdgmMWCrxBeamData.
@@ -1008,7 +1008,14 @@ class kmall():
         # TODO: Test with water column data, phaseFlag = 1 and phaseFlag = 2 to ensure this continues to function properly.
 
         dg = {}
-        format_to_unpack = "1f4H"
+
+        # Rev F definitions
+        if dgmVersion == 0:
+            format_to_unpack = "1f4H"
+        # Rev H definitions
+        elif dgmVersion == 1:
+            format_to_unpack = "1f4H1f"
+
         fields = struct.unpack(format_to_unpack, self.FID.read(struct.Struct(format_to_unpack).size))
 
         dg['beamPointAngReVertical_deg'] = fields[0]
@@ -1020,6 +1027,13 @@ class kmall():
         dg['beamTxSectorNum'] = fields[3]
         # Number of sample data for current beam. Also denoted Ns.
         dg['numSampleData'] = fields[4]
+
+        if dgmVersion == 1:
+            # The same information as in detectedRangeInSamples with higher resolution.Two way range in samples.
+            # Approximation to calculated distance from tx to bottom detection[meters] =
+            # soundVelocity_mPerSec * detectedRangeInSamples / (sampleFreq_Hz * 2).
+            # The detected range is set to zero when the beam has no bottom detection.
+            dg['detectedRangeInSamplesHighResolution'] = fields[5]
 
         # Pointer to start of array with Water Column data. Length of array = numSampleData.
         # Sample amplitudes in 0.5 dB resolution. Size of array is numSampleData * int8_t.
@@ -1092,8 +1106,9 @@ class kmall():
         dg['header'] = self.read_EMdgmHeader()
         dg['partition'] = self.read_EMdgmMpartition()
         dg['cmnPart'] = self.read_EMdgmMbody()
-        dg['txInfo'] = self.read_EMdgmMWCtxInfo()
 
+        dgmVersion = dg['dgmVersion']
+        dg['txInfo'] = self.read_EMdgmMWCtxInfo()
         # Read TX sector info for each sector
         txSectorData = []
         for sector in range(dg['txInfo']['numTxSectors']):
@@ -1119,7 +1134,7 @@ class kmall():
         rxBeamData = []
         rxPhaseInfo = []
         for idx in range(dg['rxInfo']['numBeams']):
-            rxBeamData.append(self.read_EMdgmMWCrxBeamData())
+            rxBeamData.append(self.read_EMdgmMWCrxBeamData(dgmVersion))
 
             if dg['rxInfo']['phaseFlag'] == 0:
                 pass
@@ -2012,7 +2027,7 @@ class kmall():
         self.write_EMdgmMRZ_rxInfo(dg['rxInfo'])
 
         for detclass in range(dg['rxInfo']['numExtraDetectionClasses']):
-            self.write_EMdgmMRZ_extraDetClassInfo(FID, dg['extraDetClassInfo'], detclass)
+            self.write_EMdgmMRZ_extraDetClassInfo(self.FID, dg['extraDetClassInfo'], detclass)
 
         Nseabedimage_samples = 0
         for record in range(dg['rxInfo']['numExtraDetections'] +
@@ -2054,7 +2069,7 @@ class kmall():
         for sector in range(dg['pingInfo']['numTxSectors']):
             self.write_EMdgmMRZ_txSectorInfo(dg['txSectorInfo'], sector)
 
-        write_EMdgmMRZ_rxInfo(dg['rxInfo'])
+        self.write_EMdgmMRZ_rxInfo(dg['rxInfo'])
 
         for detclass in range(dg['rxInfo']['numExtraDetectionClasses']):
             self.write_EMdgmMRZ_extraDetClassInfo(dg['extraDetClassInfo'], detclass)
@@ -2958,12 +2973,14 @@ class kmall():
         dg['header'] = self.read_EMdgmHeader()
         dg['partition'] = self.read_EMdgmMpartition()
         dg['cmnPart'] = self.read_EMdgmMbody()
-        dg['pingInfo'] = self.read_EMdgmMRZ_pingInfo()
+
+        dgmVersion = dg['dgmVersion']
+        dg['pingInfo'] = self.read_EMdgmMRZ_pingInfo(dgmVersion)
 
         # Read TX sector info for each sector
         txSectorInfo = []
         for sector in range(dg['pingInfo']['numTxSectors']):
-            txSectorInfo.append(self.read_EMdgmMRZ_txSectorInfo())
+            txSectorInfo.append(self.read_EMdgmMRZ_txSectorInfo(dgmVersion))
         dg['txSectorInfo'] = self.listofdicts2dictoflists(txSectorInfo)
 
         # Read reInfo
@@ -3038,12 +3055,15 @@ class kmall():
         dg['header'] = self.read_EMdgmHeader()
         dg['partition'] = self.read_EMdgmMpartition()
         dg['cmnPart'] = self.read_EMdgmMbody()
-        dg['pingInfo'] = self.read_EMdgmMRZ_pingInfo()
+
+
+        dgmVersion = dg['dgmVersion']
+        dg['pingInfo'] = self.read_EMdgmMRZ_pingInfo(dgmVersion)
 
         # Read TX sector info for each sector
         txSectorInfo = []
         for sector in range(dg['pingInfo']['numTxSectors']):
-            txSectorInfo.append(self.read_EMdgmMRZ_txSectorInfo())
+            txSectorInfo.append(self.read_EMdgmMRZ_txSectorInfo(dgmVersion))
         dg['txSectorInfo'] = self.listofdicts2dictoflists(txSectorInfo)
 
         # Read reInfo
@@ -3325,8 +3345,8 @@ class kmall():
 
         for offset in MRZOffsets:
             self.FID.seek(offset, 0)
-            dg = self.read_EMdgmHeader()
-            dg = self.read_EMdgmMpartition()
+            header = self.read_EMdgmHeader()
+            part = self.read_EMdgmMpartition()
             dg = self.read_EMdgmMbody()
             self.pingcnt.append(dg['pingCnt'])
             self.rxFans.append(dg['rxFansPerPing'])
@@ -4033,7 +4053,7 @@ def main(args=None):
         filestoprocess = []
 
         if verbose >= 3:
-            print("directory: " + directory)
+            print("directory: " + kmall_directory)
 
         # Recursively work through the directory looking for kmall files.
         for root, subFolders, files in os.walk(kmall_directory):
