@@ -41,6 +41,10 @@ class kmall():
         self.read_method = None
         self.eof = False
 
+    def __del__(self):
+        if self.FID:
+            self.FID.close()
+
     def decode_datagram(self):
         """
         Assumes the file pointer is at the correct position to read the size of the dgram and the identifier
