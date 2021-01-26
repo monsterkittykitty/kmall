@@ -1111,7 +1111,7 @@ class kmall():
         dg['partition'] = self.read_EMdgmMpartition()
         dg['cmnPart'] = self.read_EMdgmMbody()
 
-        dgmVersion = dg['dgmVersion']
+        dgmVersion = dg['header']['dgmVersion']
         dg['txInfo'] = self.read_EMdgmMWCtxInfo()
         # Read TX sector info for each sector
         txSectorData = []
